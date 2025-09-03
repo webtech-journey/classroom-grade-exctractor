@@ -1,150 +1,184 @@
+import pandas as pd
+import io
 import csv
 import os
-from bs4 import BeautifulSoup
+from itertools import zip_longest
 
-def populate_assignments_dict(base_dir='data'):
+# --- Main Data and DataFrame Setup ---
+
+# CSV data provided as a string
+csv_data = """name,etapa1,etapa2,etapa3,etapa4
+1000neiro,98.80/100,38.78/100,not submitted,
+AGuzmannn,not submitted,,,
+# ... (rest of your data here) ...
+yasmine204,100.00/100,68.14/100,not submitted,
+ygabsxw,not submitted,,,
+"""
+
+# Read the CSV data into a pandas DataFrame
+df = pd.read_csv(io.StringIO(csv_data))
+# Fill empty cells (NaN) with empty strings for consistent handling
+df = df.fillna('')
+
+
+# --- Analysis Functions ---
+
+def has_submitted(grade):
+    """Check if a grade string represents a valid submission."""
+    return isinstance(grade, str) and grade.strip() not in ['', 'not submitted']
+
+
+def get_performance(grade):
     """
-    Populates the assignments dictionary by reading HTML files from a directory structure.
-    Assumes a structure like:
-    /data
-        /etapa-1
-            page1.html
-            page2.html
-        /etapa-2
-            page1.html
-    Args:
-        base_dir (str): The root directory containing assignment subdirectories.
-    Returns:
-        dict: The populated assignments_html dictionary.
+    Calculate the percentage performance from a grade string (e.g., '85/100').
+    Returns None if not submitted, or a float percentage.
+    Returns -1.0 on a formatting error.
     """
-    assignments = {}
-    if not os.path.isdir(base_dir):
-        print(f"Error: Directory '{base_dir}' not found. Please create it and add your assignment files.")
-        # Create the directory to guide the user
-        os.makedirs(os.path.join(base_dir, 'etapa-1'), exist_ok=True)
-        os.makedirs(os.path.join(base_dir, 'etapa-2'), exist_ok=True)
-        print(f"Created a sample directory structure: '{base_dir}/etapa-1', '{base_dir}/etapa-2'.")
-        print("Please add your HTML files there and run the script again.")
-        return assignments
-
-    # Iterate through each item in the base directory
-    for assignment_name in sorted(os.listdir(base_dir)):
-        assignment_path = os.path.join(base_dir, assignment_name)
-        # Check if it's a directory
-        if os.path.isdir(assignment_path):
-            assignments[assignment_name] = []
-            # Go through each file in the assignment directory
-            for page_file in sorted(os.listdir(assignment_path)):
-                if page_file.endswith('.html'):
-                    file_path = os.path.join(assignment_path, page_file)
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            assignments[assignment_name].append(f.read())
-                    except Exception as e:
-                        print(f"Error reading file {file_path}: {e}")
-    return assignments
+    if not has_submitted(grade):
+        return None
+    try:
+        points, total = map(float, grade.split('/'))
+        if total == 0:
+            return 0.0
+        return (points / total) * 100
+    except (ValueError, TypeError):
+        return -1.0  # Indicates a malformed grade string
 
 
-def extract_grades(assignments_html):
+# --- Function to Write Results to CSV ---
+
+def write_analysis_to_csv(analysis_data, filename="analysis_results.csv"):
     """
-    Extracts student grades from GitHub Classroom HTML pages.
-
-    Args:
-        assignments_html (dict): A dictionary where keys are assignment names (e.g., "etapa-1")
-                                 and values are lists of HTML content strings for that assignment's pages.
-
-    Returns:
-        dict: A dictionary where keys are student names and values are another dictionary
-              mapping assignment names to grades.
-              e.g., {'student1': {'etapa-1': '100/100', 'etapa-2': '90/100'}}
-    """
-    student_grades = {}
-
-    # Iterate over each assignment and its corresponding HTML pages
-    for assignment_name, html_pages in assignments_html.items():
-        # Iterate over each HTML page for the current assignment
-        for html_content in html_pages:
-            soup = BeautifulSoup(html_content, 'html.parser')
-
-            # Find all list items that contain student information
-            student_entries = soup.find_all('div', class_='assignment-repo-list-item')
-
-            for entry in student_entries:
-                # Extract student name
-                student_name_tag = entry.find('span', class_='h5 mr-2')
-                if not student_name_tag:
-                    continue
-                student_name = student_name_tag.text.strip()
-
-                # Extract grade
-                grade = "not submitted"  # Default grade if not submitted or graded
-                grade_tag = entry.find('span', class_='Counter--secondary')
-                if grade_tag and '/' in grade_tag.text:
-                    grade = grade_tag.text.strip()
-
-                # Initialize student record if not already present
-                if student_name not in student_grades:
-                    student_grades[student_name] = {}
-
-                # Store the grade for the current assignment
-                student_grades[student_name][assignment_name] = grade
-
-    return student_grades
-
-def write_grades_to_csv(student_grades, filename="student_grades.csv"):
-    """
-    Writes the extracted student grades to a CSV file.
+    Writes the lists of students from the analysis into a single CSV file.
+    Each list is treated as a separate column.
 
     Args:
-        student_grades (dict): The dictionary of student grades returned by extract_grades.
-        filename (str): The name of the output CSV file.
+        analysis_data (dict): Keys are category names, values are lists of students.
+        filename (str): Output CSV file name.
     """
-    # Dynamically generate headers from the data to ensure they match folder names
-    all_assignments = set()
-    for grades in student_grades.values():
-        all_assignments.update(grades.keys())
-    
-    # Define the headers for the CSV file, sorted alphabetically for consistency
-    headers = ['name'] + sorted(list(all_assignments))
+    headers = [
+        'submitted_stage_1',
+        'submitted_stage_2',
+        'submitted_stage_3',
+        'submitted_stage_4',
+        'top_performers (>50%)'
+    ]
 
-    with open(filename, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=headers)
-        writer.writeheader()
+    # Retrieve and sort each list
+    submitted_s1 = sorted(analysis_data.get('submitted_stage_1', []))
+    submitted_s2 = sorted(analysis_data.get('submitted_stage_2', []))
+    submitted_s3 = sorted(analysis_data.get('submitted_stage_3', []))
+    submitted_s4 = sorted(analysis_data.get('submitted_stage_4', []))
+    top_performers_list = sorted(analysis_data.get('top_performers', []))
 
-        # Write a row for each student
-        for student, grades in sorted(student_grades.items()):
-            row = {'name': student}
-            # Populate grades for each assignment, using 'N/A' if a grade is missing
-            for header in headers[1:]:
-                 row[header] = grades.get(header, 'N/A')
-            writer.writerow(row)
-    print(f"Successfully created {filename}")
+    # Use zip_longest to handle lists of different lengths
+    exported_rows = zip_longest(
+        submitted_s1,
+        submitted_s2,
+        submitted_s3,
+        submitted_s4,
+        top_performers_list,
+        fillvalue=''
+    )
 
-
-if __name__ == '__main__':
-    # --- Instructions ---
-    # 1. Create a directory named 'data' in the same folder as this script.
-    # 2. Inside 'data', create a folder for each assignment (e.g., 'etapa-1', 'etapa-2').
-    # 3. Place all the HTML page files for an assignment inside its corresponding folder.
-    #
-    # Example structure:
-    # /
-    # ├── grade_extractor.py
-    # └── data/
-    #     ├── etapa-1/
-    #     │   ├── page1.html
-    #     │   └── page2.html
-    #     └── etapa-2/
-    #         └── page1.html
-
-    # 1. Populate the assignments dictionary from the /data directory
-    assignments = populate_assignments_dict()
-
-    if assignments:
-        # 2. Extract the grades from the HTML data
-        grades = extract_grades(assignments)
-
-        # 3. Write the extracted grades to a CSV file
-        write_grades_to_csv(grades)
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(headers)
+            writer.writerows(exported_rows)
+        print(f"\nAnalysis successfully saved to {filename}")
+    except Exception as e:
+        print(f"\nError writing to CSV file: {e}")
 
 
+# --- Score Validation Functions ---
+
+def is_valid_score(value):
+    """
+    Returns True if:
+    - The value is a string
+    - Not empty
+    - Does not start with 'not submitted'
+    - Contains '/100'
+    - Greater than 50
+    """
+    if not isinstance(value, str):
+        return False
+    value = value.strip().lower()
+    if value == "" or value.startswith("not submitted") or "/100" not in value:
+        return False
+    try:
+        score = float(value.split("/")[0])
+        return score > 50
+    except ValueError:
+        return False
+
+
+def submitted(value):
+    """
+    Returns True if the value is a valid submitted grade (>0),
+    regardless of whether it's above 50.
+    """
+    if not isinstance(value, str):
+        return False
+    value = value.strip().lower()
+    if value == "" or value.startswith("not submitted") or "/100" not in value:
+        return False
+    try:
+        score = float(value.split("/")[0])
+        return score > 0
+    except ValueError:
+        return False
+
+
+def performance_above_50(row):
+    """Check if a student has valid scores above 50 in all stages."""
+    stages = ["etapa1", "etapa2", "etapa3", "etapa4"]
+    return all(is_valid_score(row[stage]) for stage in stages)
+
+
+# --- Main Execution ---
+
+if __name__ == "__main__":
+    # Create folder for results
+    os.makedirs("result_page", exist_ok=True)
+
+    # 1. Get lists of students who submitted each stage
+    stage1_submitted = df[df["etapa1"].apply(submitted)]
+    stage2_submitted = df[df["etapa2"].apply(submitted)]
+    stage3_submitted = df[df["etapa3"].apply(submitted)]
+    stage4_submitted = df[df["etapa4"].apply(submitted)]
+
+    # 2. Get list of students with performance >50% in all stages
+    good_students = df[df.apply(performance_above_50, axis=1)]
+
+    # 3. Print results to console
+    print("--- Students who submitted STAGE 1 ---")
+    print(sorted(stage1_submitted['name'].tolist()))
+    print("\n--- Students who submitted STAGE 2 ---")
+    print(sorted(stage2_submitted['name'].tolist()))
+    print("\n--- Students who submitted STAGE 3 ---")
+    print(sorted(stage3_submitted['name'].tolist()))
+    print("\n--- Students who submitted STAGE 4 ---")
+    print(sorted(stage4_submitted['name'].tolist()))
+    print("\n--- Students with performance greater than 50% in ALL stages ---")
+    print(sorted(good_students['name'].tolist()))
+
+    # 4. Write results to CSV
+    analysis_results = {
+        'submitted_stage_1': stage1_submitted['name'].tolist(),
+        'submitted_stage_2': stage2_submitted['name'].tolist(),
+        'submitted_stage_3': stage3_submitted['name'].tolist(),
+        'submitted_stage_4': stage4_submitted['name'].tolist(),
+        'top_performers': good_students['name'].tolist()
+    }
+    write_analysis_to_csv(analysis_results, filename="result_page/analysis_results.csv")
+
+    # 5. Save individual CSVs for each stage
+    stage1_submitted.to_csv("result_page/stage1_submitted.csv", index=False)
+    stage2_submitted.to_csv("result_page/stage2_submitted.csv", index=False)
+    stage3_submitted.to_csv("result_page/stage3_submitted.csv", index=False)
+    stage4_submitted.to_csv("result_page/stage4_submitted.csv", index=False)
+    good_students.to_csv("result_page/students_above_50.csv", index=False)
+
+    print("\nCSV files generated in /result_page/")
